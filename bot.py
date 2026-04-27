@@ -10,7 +10,7 @@ EMPTY = "⬜"
 X = "❌"
 O = "⭕"
 
-# ===== CHECK WIN =====
+# ===== WIN =====
 def check_win(board, x, y, symbol):
     size = len(board)
 
@@ -28,40 +28,6 @@ def check_win(board, x, y, symbol):
             return True
     return False
 
-# ===== BUTTON =====
-class CellButton(discord.ui.Button):
-    def __init__(self, x, y):
-        super().__init__(label=" ", style=discord.ButtonStyle.secondary)
-        self.x = x
-        self.y = y
-
-    async def callback(self, interaction: discord.Interaction):
-        view: CaroView = self.view
-
-        if interaction.user != view.current_player():
-            return await interaction.response.send_message("Không phải lượt bạn", ephemeral=True)
-
-        if view.board[self.x][self.y] != EMPTY:
-            return await interaction.response.send_message("Ô đã đánh", ephemeral=True)
-
-        symbol = X if view.turn == 0 else O
-        view.board[self.x][self.y] = symbol
-
-        if check_win(view.board, self.x, self.y, symbol):
-            view.disable_all_items()
-            return await interaction.response.edit_message(
-                content=f"🏆 {interaction.user.mention} thắng!",
-                view=view
-            )
-
-        view.turn = 1 - view.turn
-        view.update_buttons()
-
-        await interaction.response.edit_message(
-            content=f"Lượt: {view.current_player().mention} | Trang {view.page+1}/4",
-            view=view
-        )
-
 # ===== VIEW =====
 class CaroView(discord.ui.View):
     def __init__(self, p1, p2):
@@ -69,52 +35,56 @@ class CaroView(discord.ui.View):
         self.players = [p1, p2]
         self.turn = 0
         self.board = [[EMPTY]*10 for _ in range(10)]
-        self.page = 0
 
-        self.update_buttons()
+        self.select = MoveSelect(self)
+        self.add_item(self.select)
 
     def current_player(self):
         return self.players[self.turn]
 
-    def update_buttons(self):
-        self.clear_items()
+    def board_text(self):
+        text = "   " + " ".join(str(i) for i in range(10)) + "\n"
+        for i, row in enumerate(self.board):
+            text += f"{i}  " + " ".join(row) + "\n"
+        return f"```{text}```"
 
-        start_x = (self.page // 2) * 5
-        start_y = (self.page % 2) * 5
+# ===== SELECT =====
+class MoveSelect(discord.ui.Select):
+    def __init__(self, view):
+        self.view_ref = view
 
-        for i in range(5):
-            for j in range(5):
-                x = start_x + i
-                y = start_y + j
+        options = [
+            discord.SelectOption(label=f"{x},{y}", value=f"{x},{y}")
+            for x in range(10) for y in range(10)
+        ]
 
-                btn = CellButton(x, y)
-                btn.row = i
-
-                if self.board[x][y] != EMPTY:
-                    btn.label = self.board[x][y]
-                    btn.disabled = True
-                    btn.style = discord.ButtonStyle.danger if btn.label == X else discord.ButtonStyle.success
-
-                self.add_item(btn)
-
-        # NAV BUTTON
-        self.add_item(NavButton("⬅️", -1))
-        self.add_item(NavButton("➡️", 1))
-
-# ===== NAV =====
-class NavButton(discord.ui.Button):
-    def __init__(self, label, direction):
-        super().__init__(label=label, style=discord.ButtonStyle.primary, row=4)
-        self.direction = direction
+        super().__init__(placeholder="Chọn vị trí đánh", options=options[:25])
 
     async def callback(self, interaction: discord.Interaction):
-        view: CaroView = self.view
+        view = self.view_ref
 
-        view.page = (view.page + self.direction) % 4
-        view.update_buttons()
+        if interaction.user != view.current_player():
+            return await interaction.response.send_message("Không phải lượt bạn", ephemeral=True)
+
+        x, y = map(int, self.values[0].split(","))
+
+        if view.board[x][y] != EMPTY:
+            return await interaction.response.send_message("Ô đã đánh", ephemeral=True)
+
+        symbol = X if view.turn == 0 else O
+        view.board[x][y] = symbol
+
+        if check_win(view.board, x, y, symbol):
+            view.clear_items()
+            return await interaction.response.edit_message(
+                content=view.board_text() + f"\n🏆 {interaction.user.mention} thắng!",
+                view=view
+            )
+
+        view.turn = 1 - view.turn
 
         await interaction.response.edit_message(
-            content=f"Lượt: {view.current_player().mention} | Trang {view.page+1}/4",
+            content=view.board_text() + f"\nLượt: {view.current_player().mention}",
             view=view
         )
 
@@ -122,16 +92,16 @@ class NavButton(discord.ui.Button):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print("Bot ready")
+    print("Ready")
 
 # ===== COMMAND =====
-@bot.tree.command(name="caro", description="Caro 10x10 (Ultimate)")
+@bot.tree.command(name="caro", description="Caro UI xịn")
 async def caro(interaction: discord.Interaction, opponent: discord.Member):
 
     view = CaroView(interaction.user, opponent)
 
     await interaction.response.send_message(
-        f"🎮 Caro 10x10 | Trang 1/4\nLượt: {interaction.user.mention}",
+        view.board_text() + f"\nLượt: {interaction.user.mention}",
         view=view
     )
 
