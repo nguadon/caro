@@ -1,27 +1,16 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
+from discord import app_commands
 import os
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== LOGIC =====
 EMPTY = "⬜"
 X = "❌"
 O = "⭕"
 
-games = {}
-
-def create_board(size):
-    return [[EMPTY for _ in range(size)] for _ in range(size)]
-
-def board_to_text(board):
-    text = "   " + " ".join(str(i) for i in range(len(board))) + "\n"
-    for i, row in enumerate(board):
-        text += f"{i}  " + " ".join(row) + "\n"
-    return text
-
+# ===== CHECK WIN =====
 def check_win(board, x, y, symbol):
     size = len(board)
 
@@ -39,69 +28,73 @@ def check_win(board, x, y, symbol):
             return True
     return False
 
-# ===== SYNC COMMAND =====
-@bot.event
-async def on_ready():
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
-    except Exception as e:
-        print(e)
+# ===== BUTTON =====
+class CaroButton(discord.ui.Button):
+    def __init__(self, x, y):
+        super().__init__(label=" ", style=discord.ButtonStyle.secondary, row=x)
+        self.x = x
+        self.y = y
 
-# ===== SLASH COMMAND =====
-@bot.tree.command(name="caro", description="Chơi cờ caro")
-@app_commands.describe(opponent="Người chơi cùng", size="Kích thước bàn (5 hoặc 10)")
-async def caro(interaction: discord.Interaction, opponent: discord.Member, size: int):
-    
-    if size not in [5, 10]:
-        return await interaction.response.send_message("Chỉ hỗ trợ 5 hoặc 10", ephemeral=True)
+    async def callback(self, interaction: discord.Interaction):
+        view: CaroView = self.view
 
-    board = create_board(size)
+        if interaction.user != view.current_player():
+            return await interaction.response.send_message("Không phải lượt bạn", ephemeral=True)
 
-    games[interaction.channel.id] = {
-        "board": board,
-        "players": [interaction.user, opponent],
-        "turn": 0
-    }
+        if view.board[self.x][self.y] != EMPTY:
+            return await interaction.response.send_message("Ô đã đánh", ephemeral=True)
 
-    await interaction.response.send_message(
-        f"🎮 Caro {size}x{size}\n```{board_to_text(board)}```\nLượt: {interaction.user.mention}"
-    )
+        symbol = X if view.turn == 0 else O
+        view.board[self.x][self.y] = symbol
 
-# ===== ĐÁNH =====
-@bot.tree.command(name="danh", description="Đánh cờ")
-@app_commands.describe(x="Hàng", y="Cột")
-async def danh(interaction: discord.Interaction, x: int, y: int):
-    
-    game = games.get(interaction.channel.id)
-    if not game:
-        return await interaction.response.send_message("Chưa có game", ephemeral=True)
+        self.label = symbol
+        self.disabled = True
+        self.style = discord.ButtonStyle.danger if symbol == X else discord.ButtonStyle.success
 
-    player = game["players"][game["turn"]]
-    if interaction.user != player:
-        return await interaction.response.send_message("Không phải lượt bạn", ephemeral=True)
+        if check_win(view.board, self.x, self.y, symbol):
+            view.disable_all_items()
+            return await interaction.response.edit_message(
+                content=f"🏆 {interaction.user.mention} thắng!",
+                view=view
+            )
 
-    board = game["board"]
+        view.turn = 1 - view.turn
 
-    if not (0 <= x < len(board) and 0 <= y < len(board)):
-        return await interaction.response.send_message("Tọa độ không hợp lệ", ephemeral=True)
-
-    if board[x][y] != EMPTY:
-        return await interaction.response.send_message("Ô đã đánh", ephemeral=True)
-
-    symbol = X if game["turn"] == 0 else O
-    board[x][y] = symbol
-
-    if check_win(board, x, y, symbol):
-        del games[interaction.channel.id]
-        return await interaction.response.send_message(
-            f"```{board_to_text(board)}```\n🏆 {interaction.user.mention} thắng!"
+        await interaction.response.edit_message(
+            content=f"Lượt: {view.current_player().mention}",
+            view=view
         )
 
-    game["turn"] = 1 - game["turn"]
+# ===== VIEW =====
+class CaroView(discord.ui.View):
+    def __init__(self, p1, p2):
+        super().__init__(timeout=300)
+        self.players = [p1, p2]
+        self.turn = 0
+        self.board = [[EMPTY]*5 for _ in range(5)]
+
+        for x in range(5):
+            for y in range(5):
+                self.add_item(CaroButton(x, y))
+
+    def current_player(self):
+        return self.players[self.turn]
+
+# ===== SYNC =====
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print("Slash synced")
+
+# ===== COMMAND =====
+@bot.tree.command(name="caro", description="Chơi caro (click)")
+async def caro(interaction: discord.Interaction, opponent: discord.Member):
+
+    view = CaroView(interaction.user, opponent)
 
     await interaction.response.send_message(
-        f"```{board_to_text(board)}```\nLượt: {game['players'][game['turn']].mention}"
+        f"🎮 Caro 5x5\nLượt: {interaction.user.mention}",
+        view=view
     )
 
 bot.run(os.getenv("TOKEN"))
